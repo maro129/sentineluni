@@ -1,10 +1,8 @@
 import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
-import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
-import { jwtSecret } from './auth/jwt-secret';
 import { HealthController } from './observability/health.controller';
 import { MetricsController } from './observability/metrics.controller';
 import { MetricsInterceptor } from './observability/metrics.interceptor';
@@ -16,6 +14,8 @@ import { UsersService } from './users/users.service';
     // Datos: PostgreSQL propio del servicio (users_db) a través del ORM TypeORM
     TypeOrmModule.forRoot({
       type: 'postgres',
+      // La URL incluye sslmode=verify-full: la conexión a PostgreSQL va cifrada con TLS
+      // y se verifica el certificado del servidor contra la CA interna (sslrootcert).
       url: process.env.DATABASE_URL ?? 'postgres://sentinel:sentinel@localhost:5432/users_db',
       entities: [User],
       synchronize: true, // crea/actualiza la tabla; en producción se usarían migraciones
@@ -23,11 +23,6 @@ import { UsersService } from './users/users.service';
       retryDelay: 2000,
     }),
     TypeOrmModule.forFeature([User]),
-    JwtModule.register({
-      secret: jwtSecret(),
-      signOptions: { algorithm: 'HS256', expiresIn: '2h', issuer: 'sentineluni', audience: 'sentineluni-api' },
-      verifyOptions: { algorithms: ['HS256'], issuer: 'sentineluni', audience: 'sentineluni-api' },
-    }),
   ],
   controllers: [AuthController, HealthController, MetricsController],
   providers: [AuthService, UsersService, { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor }],

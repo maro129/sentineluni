@@ -1,0 +1,11 @@
+# Certificado de Traefik para el tramo WAF → Traefik (TLS interno), firmado por la CA interna.
+# Lo genera el contenedor certs-init en el volumen "certs" (montado en /certs).
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/traefik.crt
+        keyFile: /certs/traefik.key

@@ -1,29 +1,27 @@
-import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { hashPassword } from './password';
-import { Role, User } from './user.entity';
-
-// Usuarios de prueba. Roles: admin y analyst gestionan incidentes; reporter solo reporta y ve los suyos.
-const SEED: Array<{ username: string; name: string; role: Role; password: string }> = [
-  { username: 'admin', name: 'Administrador', role: 'admin', password: 'admin123' },
-  { username: 'analista', name: 'Analista SOC', role: 'analyst', password: 'analista123' },
-  { username: 'usuario', name: 'Usuario UNI', role: 'reporter', password: 'usuario123' },
-];
+import type { Identity } from '../keycloak/roles';
+import { User } from './user.entity';
 
 @Injectable()
-export class UsersService implements OnApplicationBootstrap {
+export class UsersService {
   private readonly log = new Logger(UsersService.name);
+  /** Último rol/nombre guardado por usuario: evita escribir en la base en cada petición. */
+  private readonly seen = new Map<string, string>();
 
   constructor(@InjectRepository(User) private readonly users: Repository<User>) {}
 
-  async onApplicationBootstrap() {
-    if ((await this.users.count()) > 0) return;
-    await this.users.save(SEED.map(({ password, ...u }) => this.users.create({ ...u, passwordHash: hashPassword(password) })));
-    this.log.log(`usuarios de prueba creados: ${SEED.map((u) => u.username).join(', ')}`);
-  }
-
-  findByUsername(username: string) {
-    return this.users.findOneBy({ username });
+  /** Guarda (o actualiza) el perfil del usuario autenticado por Keycloak en users_db. */
+  async remember(identity: Identity) {
+    const key = `${identity.role}|${identity.name}`;
+    if (this.seen.get(identity.sub) === key) return;
+    try {
+      await this.users.save(this.users.create({ username: identity.sub, name: identity.name, role: identity.role }));
+      this.seen.set(identity.sub, key);
+    } catch (err) {
+      // La base no debe impedir el acceso: la identidad ya fue validada por Keycloak.
+      this.log.warn(`no se pudo guardar el perfil de ${identity.sub}: ${(err as Error).message}`);
+    }
   }
 }

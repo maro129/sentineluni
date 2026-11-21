@@ -1,22 +1,25 @@
 # API GATEWAY (Traefik v3) — configuración estática.
-# Puerta de entrada única: HTTPS, routing, autenticación JWT, rate limiting, seguridad,
-# logging (access log JSON), métricas Prometheus y trazas OpenTelemetry.
+# Puerta de entrada a los microservicios: routing, autenticación JWT (Keycloak), rate limiting,
+# cabeceras de seguridad, logging (access log JSON), métricas Prometheus y trazas OpenTelemetry.
+#
+# Desde la entrega de seguridad, Traefik YA NO recibe tráfico directo de internet:
+#   navegador ──TLS──▶ WAF (ModSecurity + OWASP CRS) ──TLS──▶ Traefik :443 ──▶ servicios
+# Traefik no publica los puertos 80/443 al exterior; solo el WAF puede llegar a él.
 entryPoints:
-  web:
-    address: ":80"
-    http:
-      redirections:              # todo HTTP se redirige a HTTPS
-        entryPoint: { to: websecure, scheme: https, permanent: true }
   websecure:
     address: ":443"
     http:
-      tls: {}                    # autofirmado por defecto; con scripts/gen-certs.sh usa mkcert (confiable)
+      tls: {}                    # certificado interno "traefik" (gateway/dynamic/tls.yml), firmado por la CA interna
+    forwardedHeaders:
+      # El único cliente de Traefik es el WAF, que añade X-Forwarded-For con la IP real del usuario.
+      # Se confía en esa cabecera para que el rate limiting cuente por usuario y no por WAF.
+      insecure: true
   metrics:
     address: ":8082"             # solo red interna: lo lee Prometheus
 
 providers:
   file:
-    directory: /etc/traefik/dynamic   # routes.yml (+ tls.yml si generaste certificados con scripts/gen-certs.sh)
+    directory: /etc/traefik/dynamic   # routes.yml + tls.yml (certificado interno)
     watch: true
 
 api:
@@ -34,6 +37,7 @@ accessLog:
     headers:
       names:
         X-User: keep             # quién hizo la petición (lo pone el forwardAuth)
+        X-Forwarded-For: keep    # IP real del usuario (la añade el WAF)
         Authorization: drop      # nunca registrar el token
 
 metrics:

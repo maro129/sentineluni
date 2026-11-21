@@ -1,0 +1,131 @@
+{
+  "realm": "sentineluni",
+  "displayName": "SentinelUNI · Mini-SOC",
+  "enabled": true,
+  "sslRequired": "external",
+  "defaultSignatureAlgorithm": "RS256",
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "loginWithEmailAllowed": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "passwordPolicy": "length(8) and notUsername",
+  "internationalizationEnabled": true,
+  "supportedLocales": ["es", "en"],
+  "defaultLocale": "es",
+  "roles": {
+    "realm": [
+      { "name": "admin", "description": "Administrador: gestiona incidentes" },
+      { "name": "analyst", "description": "Analista SOC: clasifica y resuelve incidentes" },
+      { "name": "reporter", "description": "Reportante: reporta y ve solo sus incidentes" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "sentineluni-api",
+      "name": "SentinelUNI API (audiencia de los tokens)",
+      "enabled": true,
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    },
+    {
+      "clientId": "sentinel-web",
+      "name": "SentinelUNI Web (React shell + microfrontends)",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "https://localhost",
+      "baseUrl": "/",
+      "redirectUris": ["https://localhost/*"],
+      "webOrigins": ["https://localhost"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://localhost/*",
+        "access.token.signed.response.alg": "RS256"
+      },
+      "protocolMappers": [
+        {
+          "name": "audiencia sentineluni-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "sentineluni-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "sentinel-mobile",
+      "name": "SentinelUNI Móvil (React Native) y login por API",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "access.token.signed.response.alg": "RS256"
+      },
+      "protocolMappers": [
+        {
+          "name": "audiencia sentineluni-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "sentineluni-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Administrador",
+      "lastName": "SentinelUNI",
+      "email": "admin@sentineluni.local",
+      "credentials": [{ "type": "password", "value": "admin123", "temporary": false }],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "analista",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Analista",
+      "lastName": "SOC",
+      "email": "analista@sentineluni.local",
+      "credentials": [{ "type": "password", "value": "analista123", "temporary": false }],
+      "realmRoles": ["analyst"]
+    },
+    {
+      "username": "usuario",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Usuario",
+      "lastName": "UNI",
+      "email": "usuario@sentineluni.local",
+      "credentials": [{ "type": "password", "value": "usuario123", "temporary": false }],
+      "realmRoles": ["reporter"]
+    }
+  ]
+}

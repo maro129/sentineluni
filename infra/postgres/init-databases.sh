@@ -12,3 +12,5 @@ SQL
 create users_db users_svc "$USERS_DB_PASSWORD"
 create incidents_db incidents_svc "$INCIDENTS_DB_PASSWORD"
 create notifications_db notifications_svc "$NOTIFICATIONS_DB_PASSWORD"
+# Keycloak (servidor de identidad) guarda realms, usuarios y sesiones en su propia base
+create keycloak_db keycloak_svc "$KEYCLOAK_DB_PASSWORD"

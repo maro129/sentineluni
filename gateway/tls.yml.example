@@ -1,7 +1,0 @@
-# Copia este archivo a gateway/dynamic/tls.yml después de generar los certificados con mkcert.
-tls:
-  stores:
-    default:
-      defaultCertificate:
-        certFile: /etc/traefik/certs/localhost.pem
-        keyFile: /etc/traefik/certs/localhost-key.pem

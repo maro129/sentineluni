@@ -25,7 +25,7 @@ module.exports = makeConfig({
   devServer: {
     proxy: [
       mfe('incidents', 4001), mfe('notifications', 4002), mfe('audit', 4003),
-      { context: ['/api'], target: api, secure: false, changeOrigin: true },
+      { context: ['/api', '/auth'], target: api, secure: false, changeOrigin: true },
     ],
   },
   plugins: (prod) => [
@@ -36,7 +36,8 @@ module.exports = makeConfig({
           clientsClaim: true,
           skipWaiting: true,
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api\//, /^\/mfe\//],
+          // /auth/ es Keycloak: el service worker nunca debe responder por él (rompería el login)
+          navigateFallbackDenylist: [/^\/api\//, /^\/mfe\//, /^\/auth\//],
           exclude: [/\.map$/],
           runtimeCaching: [
             // remoteEntry siempre fresco (NetworkFirst); el resto de chunks de los MFE con caché

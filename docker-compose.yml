@@ -1,10 +1,12 @@
 # SentinelUNI — arquitectura completa del curso con Docker Compose.
-#   Frontend (shell + 3 MFE, PWA) → API Gateway (Traefik) → Backend (NestJS, Go)
-#   → Event Bus (NATS JetStream) → Event Consumers (Go) → Datos (PostgreSQL, Redis, MongoDB, MinIO)
+#   Frontend (shell + 3 MFE, PWA) → WAF (ModSecurity + OWASP CRS) → API Gateway (Traefik)
+#   → Backend (NestJS, Go) → Event Bus (NATS JetStream) → Event Consumers (Go)
+#   → Datos (PostgreSQL, Redis, MongoDB, S3)
+#   + Seguridad: Keycloak (identidad, JWT RS256), WAF y TLS en cada tramo crítico
 #   + Observabilidad (OpenTelemetry Collector, Jaeger, Prometheus, Grafana)
 #
-# Uso:  cp .env.example .env   &&   docker compose up -d --build   →   https://localhost
-# Solo el API Gateway publica puertos hacia afuera (80/443). Los paneles de observabilidad
+# Uso:  copy .env.example .env   &&   docker compose up -d --build   →   https://localhost
+# Solo el WAF publica puertos hacia afuera (80/443). Los paneles de observabilidad
 # se publican únicamente en 127.0.0.1.
 
 name: sentineluni
@@ -12,27 +14,113 @@ name: sentineluni
 x-go-service: &go-service
   restart: unless-stopped
   networks: [backend]
+  volumes: [certs:/certs:ro]
   environment: &go-env
-    NATS_URL: nats://nats:4222
+    NATS_URL: tls://nats:4222          # Event Bus con TLS
+    NATS_CA_FILE: /certs/ca.crt        # CA interna para verificar el certificado de NATS
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
   depends_on: &go-deps
     nats: { condition: service_healthy }
 
 services:
+  # ───────────────────────── SEGURIDAD: CERTIFICADOS (TLS) ─────────────────────────
+  # Crea una vez la CA interna y los certificados de waf, traefik, keycloak, nats y postgres
+  # en el volumen "certs". Termina y queda "Exited (0)": es normal.
+  certs-init:
+    image: alpine/openssl:latest
+    entrypoint: ["/bin/sh", "/gen-internal-certs.sh"]
+    volumes:
+      - ./infra/certs/gen-internal-certs.sh:/gen-internal-certs.sh:ro
+      - certs:/certs
+    network_mode: none
+    restart: "no"
+
+  # ───────────────────────── SEGURIDAD: WAF ─────────────────────────
+  # Web Application Firewall: ModSecurity + OWASP Core Rule Set delante del API Gateway.
+  # Inspecciona cada petición HTTP/HTTPS (SQLi, XSS, path traversal, escáneres...) y la bloquea
+  # con 403 antes de que llegue a Traefik. Es lo ÚNICO publicado hacia afuera (80 → 443).
+  waf:
+    image: owasp/modsecurity-crs:nginx-alpine
+    restart: unless-stopped
+    ports:
+      - "80:8080"
+      - "443:8443"
+    environment:
+      SERVER_NAME: localhost
+      PORT: "8080"
+      SSL_PORT: "8443"
+      SSL_CERT_FILE: /certs/waf.crt            # TLS navegador → WAF (certificado de la CA interna)
+      SSL_CERT_KEY_FILE: /certs/waf.key
+      NGINX_ALWAYS_TLS_REDIRECT: "on"          # todo HTTP se redirige a HTTPS
+      BACKEND: https://traefik:443             # TLS WAF → API Gateway
+      MODSEC_RULE_ENGINE: "On"                 # On = bloquea · DetectionOnly = solo registra
+      BLOCKING_PARANOIA: "1"                   # nivel de paranoia de OWASP CRS 4 (1 = pocos falsos positivos)
+      DETECTION_PARANOIA: "1"
+      ANOMALY_INBOUND: "5"                     # puntaje de anomalía a partir del cual se bloquea
+      ANOMALY_OUTBOUND: "4"
+      ALLOWED_METHODS: "GET HEAD POST OPTIONS PATCH"   # PATCH: cambio de estado de incidentes
+      MODSEC_REQ_BODY_LIMIT: "6291456"         # 6 MB (la evidencia admite hasta 5 MB)
+      MODSEC_AUDIT_LOG_FORMAT: JSON
+      MODSEC_AUDIT_ENGINE: RelevantOnly        # registra solo las peticiones sospechosas o bloqueadas
+    volumes:
+      - certs:/certs:ro
+      # Excepciones puntuales de falsos positivos (p. ej. el redirect_uri del login de Keycloak)
+      - ./infra/waf/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:ro
+    networks: [edge]
+    depends_on:
+      certs-init: { condition: service_completed_successfully }
+      traefik: { condition: service_started }
+
+  # ───────────────────────── SEGURIDAD: IDENTIDAD (KEYCLOAK) ─────────────────────────
+  # Servidor de identidad: pantalla de login, usuarios, roles y emisión de tokens JWT firmados
+  # con RS256 (llave privada solo en Keycloak; los servicios validan con la llave pública).
+  # Se publica a través del WAF y Traefik en https://localhost/auth
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    restart: unless-stopped
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: "jdbc:postgresql://postgres:5432/keycloak_db?sslmode=verify-full&sslrootcert=/certs/ca.crt"
+      KC_DB_USERNAME: keycloak_svc
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Define KEYCLOAK_DB_PASSWORD en .env}
+      KC_HOSTNAME: https://localhost/auth      # URL pública: también es el emisor (iss) de los tokens
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_PROXY_HEADERS: xforwarded             # está detrás de WAF + Traefik
+      KC_HTTP_ENABLED: "false"                 # solo HTTPS (TLS Traefik → Keycloak)
+      KC_HTTPS_CERTIFICATE_FILE: /certs/keycloak.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /certs/keycloak.key
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_BOOTSTRAP_ADMIN_USERNAME: kcadmin     # administrador de la consola de Keycloak
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Define KEYCLOAK_ADMIN_PASSWORD en .env}
+    volumes:
+      - ./infra/keycloak/sentineluni-realm.json:/opt/keycloak/data/import/sentineluni-realm.json:ro
+      - certs:/certs:ro
+    networks: [backend]
+    depends_on:
+      certs-init: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8443 || exit 1"]
+      interval: 10s
+      start_period: 60s
+      retries: 30
+
   # ───────────────────────── API GATEWAY ─────────────────────────
   traefik:
     image: traefik:v3.1
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
-      - "127.0.0.1:8081:8080"   # dashboard de Traefik
+      - "127.0.0.1:8081:8080"   # dashboard de Traefik (80/443 ahora los publica el WAF)
     volumes:
       - ./gateway/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./gateway/dynamic:/etc/traefik/dynamic:ro
-      - ./gateway/certs:/etc/traefik/certs:ro
+      - certs:/certs:ro
     networks: [edge, backend]
-    depends_on: [user-service]
+    depends_on:
+      certs-init: { condition: service_completed_successfully }
+      user-service: { condition: service_started }
 
   # ───────────────────────── FRONTEND (Module Federation + PWA) ─────────────────────────
   shell:
@@ -57,10 +145,14 @@ services:
     build: ./services/user-service
     restart: unless-stopped
     networks: [backend]
+    volumes: [certs:/certs:ro]
     environment:
       PORT: "3000"
-      DATABASE_URL: postgres://users_svc:${USERS_DB_PASSWORD}@postgres:5432/users_db
-      JWT_SECRET: ${JWT_SECRET:?Define JWT_SECRET en .env (mínimo 32 caracteres)}
+      DATABASE_URL: postgres://users_svc:${USERS_DB_PASSWORD}@postgres:5432/users_db?sslmode=verify-full&sslrootcert=/certs/ca.crt
+      KEYCLOAK_INTERNAL_URL: https://keycloak:8443/auth       # llaves públicas (JWKS) y login por API, con TLS
+      KEYCLOAK_ISSUER: https://localhost/auth/realms/sentineluni
+      KEYCLOAK_AUDIENCE: sentineluni-api
+      NODE_EXTRA_CA_CERTS: /certs/ca.crt                      # Node confía en la CA interna
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: user-service
     depends_on:
@@ -71,7 +163,7 @@ services:
     build: { context: ., dockerfile: go.Dockerfile, args: { SERVICE: services/incident-service } }
     environment:
       <<: *go-env
-      DATABASE_URL: postgres://incidents_svc:${INCIDENTS_DB_PASSWORD}@postgres:5432/incidents_db
+      DATABASE_URL: postgres://incidents_svc:${INCIDENTS_DB_PASSWORD}@postgres:5432/incidents_db?sslmode=verify-full&sslrootcert=/certs/ca.crt
       S3_ENDPOINT: minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
@@ -79,7 +171,7 @@ services:
     depends_on:
       <<: *go-deps
       postgres: { condition: service_healthy }
-      minio: { condition: service_started }
+      minio: { condition: service_healthy }
 
   # ───────────────────────── EVENT CONSUMERS ─────────────────────────
   triage-service:
@@ -91,7 +183,7 @@ services:
     build: { context: ., dockerfile: go.Dockerfile, args: { SERVICE: consumers/notification-service } }
     environment:
       <<: *go-env
-      DATABASE_URL: postgres://notifications_svc:${NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db
+      DATABASE_URL: postgres://notifications_svc:${NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=verify-full&sslrootcert=/certs/ca.crt
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     networks: [backend, egress]   # salida a internet solo para Telegram
@@ -116,9 +208,12 @@ services:
   nats:
     image: nats:2.10-alpine
     restart: unless-stopped
-    command: ["-js", "-sd", "/data", "-m", "8222"]
-    volumes: [nats-data:/data]
+    # TLS obligatorio para los clientes (puerto 4222). El monitoreo (8222) queda en HTTP local.
+    command: ["-js", "-sd", "/data", "-m", "8222", "--tls", "--tlscert", "/certs/nats.crt", "--tlskey", "/certs/nats.key"]
+    volumes: [nats-data:/data, certs:/certs:ro]
     networks: [backend, ops]
+    depends_on:
+      certs-init: { condition: service_completed_successfully }
     ports: ["127.0.0.1:8222:8222"]   # monitoreo de NATS
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz?js-enabled-only=true"]
@@ -129,16 +224,34 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # TLS: el servidor presenta el certificado "postgres" y pg_hba.conf rechaza conexiones sin cifrar.
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/certs/postgres.crt
+      - -c
+      - ssl_key_file=/certs/postgres.key
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       USERS_DB_PASSWORD: ${USERS_DB_PASSWORD}
       INCIDENTS_DB_PASSWORD: ${INCIDENTS_DB_PASSWORD}
       NOTIFICATIONS_DB_PASSWORD: ${NOTIFICATIONS_DB_PASSWORD}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Define KEYCLOAK_DB_PASSWORD en .env}
     volumes:
       - pg-data:/var/lib/postgresql/data
       - ./infra/postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+      - ./infra/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - certs:/certs:ro
     networks: [backend]
+    depends_on:
+      certs-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
       interval: 5s
@@ -165,22 +278,30 @@ services:
       interval: 5s
       retries: 30
 
+  # Object Storage compatible con S3. MinIO retiró sus imágenes públicas (sept. 2026),
+  # así que se usa SeaweedFS con su API S3 en el puerto 9000. El nombre "minio" se
+  # mantiene para que el Incident Service (SDK minio-go) no cambie: S3 es S3.
+  # Autenticación S3: al arrancar se crea la identidad del Incident Service con las
+  # credenciales de .env (MINIO_ROOT_USER / MINIO_ROOT_PASSWORD); sin ellas no se accede.
   minio:
-    # MinIO (Object Storage, API S3). La imagen oficial minio/minio fue retirada de Docker Hub;
-    # se usa la compilación de Chainguard del mismo MinIO. Corre como root para poder escribir
-    # en el volumen (la imagen trae el usuario 65532 por defecto).
-    image: cgr.dev/chainguard/minio:latest
-    user: "0:0"
+    image: chrislusf/seaweedfs:4.47
     restart: unless-stopped
-    command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        printf '{"identities":[{"name":"incident-service","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","List","Tagging","Write"]}]}'
+        "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" > /tmp/s3.json &&
+        exec weed server -dir=/data -s3 -s3.port=9000 -ip.bind=0.0.0.0 -s3.config=/tmp/s3.json
     volumes: [minio-data:/data]
     networks: [backend, ops]
-    ports: ["127.0.0.1:9001:9001"]   # consola de MinIO (Object Storage)
-    # Sin healthcheck: la imagen no trae mc, curl ni wget. Incident Service reintenta
-    # la conexión con MinIO hasta que esté listo.
+    ports: ["127.0.0.1:9001:8888"]   # explorador de archivos de SeaweedFS (evidencias)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status || exit 1"]
+      interval: 5s
+      retries: 30
 
   # ───────────────────────── OBSERVABILIDAD ─────────────────────────
   otel-collector:
@@ -234,3 +355,4 @@ volumes:
   nats-data: {}
   prom-data: {}
   grafana-data: {}
+  certs: {}                      # CA interna y certificados TLS (los crea certs-init)

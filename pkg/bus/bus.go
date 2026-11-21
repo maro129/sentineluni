@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -66,9 +67,17 @@ func NewID(n int) string {
 }
 
 // Connect se conecta a NATS (reintentando) y asegura que exista el stream SENTINEL.
+//
+// TLS: si NATS_CA_FILE apunta al certificado de la CA interna, la conexión se cifra con TLS
+// y se verifica que el servidor sea realmente "nats" (la URL debe ser tls://nats:4222).
 func Connect(ctx context.Context, url, source string) (*Bus, error) {
-	nc, err := nats.Connect(url, nats.Name(source), nats.RetryOnFailedConnect(true),
-		nats.MaxReconnects(-1), nats.ReconnectWait(time.Second))
+	opts := []nats.Option{nats.Name(source), nats.RetryOnFailedConnect(true),
+		nats.MaxReconnects(-1), nats.ReconnectWait(time.Second)}
+	if ca := os.Getenv("NATS_CA_FILE"); ca != "" {
+		opts = append(opts, nats.RootCAs(ca))
+		slog.Info("Event Bus con TLS", "ca", ca)
+	}
+	nc, err := nats.Connect(url, opts...)
 	if err != nil {
 		return nil, err
 	}

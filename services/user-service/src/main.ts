@@ -1,4 +1,5 @@
-// USER SERVICE (Backend, NestJS): autentica usuarios, emite el JWT y lo verifica para el API Gateway.
+// USER SERVICE (Backend, NestJS): valida los JWT RS256 de Keycloak para el API Gateway y
+// guarda el perfil de los usuarios. Las credenciales y la emisión de tokens están en Keycloak.
 import './tracing';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';

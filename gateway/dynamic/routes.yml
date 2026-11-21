@@ -1,7 +1,16 @@
 # API GATEWAY (Traefik v3) — rutas, middlewares y servicios.
+# Identidad: Keycloak (realm "sentineluni") emite los tokens JWT firmados con RS256.
+# El forwardAuth valida cada token en User Service contra las llaves públicas de Keycloak.
 http:
   routers:
     # ---------- API pública ----------
+    # ---------- Keycloak (servidor de identidad): pantalla de login, tokens y llaves públicas ----------
+    keycloak:
+      rule: "PathPrefix(`/auth/`)"
+      entryPoints: [websecure]
+      middlewares: [login-ratelimit-keycloak, keycloak-headers]
+      service: keycloak
+    # Login por API (app móvil y pruebas con curl): User Service lo reenvía a Keycloak
     auth-login:
       rule: "Path(`/api/auth/login`) && Method(`POST`)"
       entryPoints: [websecure]
@@ -73,18 +82,39 @@ http:
       service: shell
 
   middlewares:
-    # Autenticación: cada petición protegida se valida en User Service (/auth/verify).
+    # Autenticación: cada petición protegida se valida en User Service (/auth/verify), que
+    # comprueba la firma RS256 del token de Keycloak, el emisor, la audiencia y la expiración.
     # Si el JWT es válido, Traefik REEMPLAZA X-User / X-Role con la identidad verificada.
     jwt-auth:
       forwardAuth:
         address: "http://user-service:3000/auth/verify"
         authResponseHeaders: [X-User, X-Role, X-User-Name]
-    # Rate limiting por IP: 100 peticiones por minuto (ráfaga de 50).
+    # Rate limiting: 300 peticiones por minuto (ráfaga de 100).
+    # Detrás del WAF todas las peticiones llegan desde la IP del WAF, así que el límite es global
+    # (un panel abierto usa ~60/min; 300 permite varias sesiones en la demo).
     api-ratelimit:
-      rateLimit: { average: 100, period: 1m, burst: 50 }
-    # Login más estricto contra fuerza bruta: 10 intentos por minuto por IP.
+      rateLimit:
+        average: 300
+        period: 1m
+        burst: 100
+    # Login por API más estricto contra fuerza bruta: 10 intentos por minuto.
     login-ratelimit:
-      rateLimit: { average: 10, period: 1m, burst: 5 }
+      rateLimit:
+        average: 10
+        period: 1m
+        burst: 5
+    # Keycloak: sus páginas cargan varios recursos (CSS, JS, imágenes), por eso un límite mayor.
+    # Además Keycloak bloquea la cuenta tras 5 contraseñas erradas (bruteForceProtected del realm).
+    login-ratelimit-keycloak:
+      rateLimit:
+        average: 120
+        period: 1m
+        burst: 60
+    keycloak-headers:
+      headers:
+        stsSeconds: 31536000
+        contentTypeNosniff: true
+        referrerPolicy: no-referrer
     strip-api:
       stripPrefix: { prefixes: ["/api"] }
     to-health:
@@ -110,7 +140,18 @@ http:
         referrerPolicy: same-origin
         contentSecurityPolicy: "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'"
 
+  # Traefik → Keycloak también va cifrado (TLS) y verifica el certificado con la CA interna.
+  serversTransports:
+    internal-tls:
+      serverName: keycloak
+      rootCAs: [/certs/ca.crt]
+
   services:
+    keycloak:
+      loadBalancer:
+        serversTransport: internal-tls
+        passHostHeader: true
+        servers: [{ url: "https://keycloak:8443" }]
     user-service:
       loadBalancer: { servers: [{ url: "http://user-service:3000" }] }
     incident-service:

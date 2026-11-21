@@ -1,5 +1,6 @@
-import { lazy, useEffect, useState, type FormEvent } from 'react';
-import { api, on, session, usePolling, type User } from '@sentinel/shared';
+import { lazy, useEffect, useState } from 'react';
+import { on, usePolling, type User } from '@sentinel/shared';
+import { initAuth, logout, relogin } from './auth';
 import { RemoteSlot } from './RemoteSlot';
 
 // Microfrontends cargados en tiempo de ejecución (Module Federation)
@@ -11,42 +12,31 @@ const AuditLog = lazy(() => import('audit/AuditLog'));
 const ROLE: Record<User['role'], string> = { admin: 'Administrador', analyst: 'Analista', reporter: 'Reportante' };
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(() => (session.token() ? session.user() : null));
-  useEffect(() => on('sentinel:logout', () => setUser(null)), []);
-  if (!user) return <Login onLogin={setUser} />;
-  return <Dashboard user={user} onLogout={() => session.clear()} />;
-}
-
-function Login({ onLogin }: { onLogin: (u: User) => void }) {
-  const [username, setUsername] = useState('analista');
-  const [password, setPassword] = useState('');
+  const [user, setUser] = useState<User | null>(null);
   const [error, setError] = useState('');
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setError('');
-    try {
-      const { token, user } = await api<{ token: string; user: User }>('/auth/login', { method: 'POST', body: { username, password } });
-      session.save(token, user);
-      onLogin(user);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
+  useEffect(() => {
+    initAuth()
+      .then((u) => (u ? setUser(u) : setError('Tu usuario no tiene un rol de SentinelUNI (admin, analyst o reporter).')))
+      .catch(() => setError('No se pudo conectar con el servidor de identidad (Keycloak). Revisa que el contenedor keycloak esté en "healthy".'));
+    // Un 401 de la API borra la sesión: se vuelve a la pantalla de login de Keycloak.
+    return on('sentinel:logout', relogin);
+  }, []);
 
+  if (error) return <AuthMessage text={error} />;
+  if (!user) return <AuthMessage text="Conectando con Keycloak…" />;
+  return <Dashboard user={user} onLogout={logout} />;
+}
+
+function AuthMessage({ text }: { text: string }) {
   return (
     <main className="login">
-      <form className="panel login-box" onSubmit={submit}>
+      <div className="panel login-box">
         <div className="brand"><span className="dot" />SentinelUNI</div>
         <p className="muted">Mini-SOC · gestión de incidentes de seguridad</p>
-        <label htmlFor="u">Usuario</label>
-        <input id="u" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
-        <label htmlFor="p">Contraseña</label>
-        <input id="p" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
-        {error && <p className="error" role="alert">{error}</p>}
-        <button type="submit">Ingresar</button>
-        <p className="hint">Usuarios de prueba: analista / analista123 · admin / admin123 · usuario / usuario123</p>
-      </form>
+        <p role="status">{text}</p>
+        <p className="hint">Inicio de sesión con Keycloak (OpenID Connect · JWT RS256)</p>
+      </div>
     </main>
   );
 }
