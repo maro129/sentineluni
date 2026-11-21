@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "SentinelUNI",
+    "slug": "sentineluni",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0d1418",
+    "android": { "package": "pe.edu.uni.sentineluni" },
+    "ios": { "bundleIdentifier": "pe.edu.uni.sentineluni" }
+  }
+}

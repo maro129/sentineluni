@@ -1,0 +1,100 @@
+# API GATEWAY en Kubernetes: Traefik instalado con Helm (incluye los CRDs IngressRoute/Middleware):
+#   helm repo add traefik https://traefik.github.io/charts
+#   helm install traefik traefik/traefik -n traefik --create-namespace \
+#     --set "additionalArguments={--tracing.otlp.http.endpoint=http://otel-collector.sentineluni:4318/v1/traces}"
+# Las mismas reglas que gateway/dynamic/routes.yml, expresadas como recursos de Kubernetes.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: { name: jwt-auth, namespace: sentineluni }
+spec:
+  forwardAuth:
+    address: http://user-service.sentineluni:3000/auth/verify
+    authResponseHeaders: [X-User, X-Role, X-User-Name]
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: { name: api-ratelimit, namespace: sentineluni }
+spec:
+  rateLimit: { average: 100, period: 1m, burst: 50 }
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: { name: login-ratelimit, namespace: sentineluni }
+spec:
+  rateLimit: { average: 10, period: 1m, burst: 5 }
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: { name: strip-api, namespace: sentineluni }
+spec:
+  stripPrefix: { prefixes: [/api] }
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: { name: to-health, namespace: sentineluni }
+spec:
+  replacePath: { path: /health }
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: { name: strip-mfe, namespace: sentineluni }
+spec:
+  stripPrefix: { prefixes: [/mfe/incidents, /mfe/notifications, /mfe/audit] }
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata: { name: security-headers, namespace: sentineluni }
+spec:
+  headers:
+    stsSeconds: 31536000
+    contentTypeNosniff: true
+    frameDeny: true
+    referrerPolicy: same-origin
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata: { name: sentineluni, namespace: sentineluni }
+spec:
+  entryPoints: [websecure]
+  tls: {}
+  routes:
+    - match: Path(`/api/auth/login`) && Method(`POST`)
+      middlewares: [{ name: login-ratelimit }, { name: strip-api }, { name: security-headers }]
+      services: [{ name: user-service, port: 3000 }]
+    - match: PathPrefix(`/api/incidents`)
+      middlewares: [{ name: api-ratelimit }, { name: jwt-auth }, { name: strip-api }, { name: security-headers }]
+      services: [{ name: incident-service, port: 8080 }]
+    - match: PathPrefix(`/api/notifications`)
+      middlewares: [{ name: api-ratelimit }, { name: jwt-auth }, { name: strip-api }, { name: security-headers }]
+      services: [{ name: notification-service, port: 8080 }]
+    - match: PathPrefix(`/api/audit`)
+      middlewares: [{ name: api-ratelimit }, { name: jwt-auth }, { name: strip-api }, { name: security-headers }]
+      services: [{ name: audit-service, port: 8080 }]
+    - match: Path(`/api/health/users`)
+      middlewares: [{ name: to-health }]
+      services: [{ name: user-service, port: 3000 }]
+    - match: Path(`/api/health/incidents`)
+      middlewares: [{ name: to-health }]
+      services: [{ name: incident-service, port: 8080 }]
+    - match: Path(`/api/health/triage`)
+      middlewares: [{ name: to-health }]
+      services: [{ name: triage-service, port: 8080 }]
+    - match: Path(`/api/health/notifications`)
+      middlewares: [{ name: to-health }]
+      services: [{ name: notification-service, port: 8080 }]
+    - match: Path(`/api/health/audit`)
+      middlewares: [{ name: to-health }]
+      services: [{ name: audit-service, port: 8080 }]
+    - match: PathPrefix(`/mfe/incidents/`)
+      middlewares: [{ name: strip-mfe }, { name: security-headers }]
+      services: [{ name: mfe-incidents, port: 80 }]
+    - match: PathPrefix(`/mfe/notifications/`)
+      middlewares: [{ name: strip-mfe }, { name: security-headers }]
+      services: [{ name: mfe-notifications, port: 80 }]
+    - match: PathPrefix(`/mfe/audit/`)
+      middlewares: [{ name: strip-mfe }, { name: security-headers }]
+      services: [{ name: mfe-audit, port: 80 }]
+    - match: PathPrefix(`/`)
+      priority: 1
+      middlewares: [{ name: security-headers }]
+      services: [{ name: shell, port: 80 }]

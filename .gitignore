@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+gateway/certs/*.pem
+gateway/dynamic/tls.yml
+*.local.mod
+*.local.sum
+mobile/.expo/

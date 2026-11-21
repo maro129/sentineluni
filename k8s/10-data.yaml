@@ -1,0 +1,168 @@
+# DATOS y EVENT BUS (para la demo; en producción se usarían servicios gestionados u operadores)
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: postgres-init, namespace: sentineluni }
+data:
+  10-init-databases.sh: |
+    #!/bin/sh
+    # Una base de datos y un usuario por microservicio: cada servicio es dueño de sus datos
+    # y no puede leer las tablas de los demás.
+    set -e
+    create() { # base usuario contraseña
+      psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<SQL
+    CREATE USER $2 WITH PASSWORD '$3';
+    CREATE DATABASE $1 OWNER $2;
+    REVOKE ALL ON DATABASE $1 FROM PUBLIC;
+    SQL
+    }
+    create users_db users_svc "$USERS_DB_PASSWORD"
+    create incidents_db incidents_svc "$INCIDENTS_DB_PASSWORD"
+    create notifications_db notifications_svc "$NOTIFICATIONS_DB_PASSWORD"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: postgres, namespace: sentineluni, labels: { app: postgres, part-of: sentineluni } }
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres, part-of: sentineluni } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_USER, value: postgres }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: POSTGRES_PASSWORD } } }
+            - { name: USERS_DB_PASSWORD, valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: USERS_DB_PASSWORD } } }
+            - { name: INCIDENTS_DB_PASSWORD, valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: INCIDENTS_DB_PASSWORD } } }
+            - { name: NOTIFICATIONS_DB_PASSWORD, valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: NOTIFICATIONS_DB_PASSWORD } } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          readinessProbe: { exec: { command: [pg_isready, -U, postgres] }, periodSeconds: 5 }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }, { name: init, mountPath: /docker-entrypoint-initdb.d }]
+      volumes: [{ name: init, configMap: { name: postgres-init, defaultMode: 0555 } }]
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 2Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: postgres, namespace: sentineluni }
+spec:
+  selector: { app: postgres }
+  ports: [{ name: main, port: 5432, targetPort: 5432 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: redis, namespace: sentineluni, labels: { app: redis, part-of: sentineluni } }
+spec:
+  serviceName: redis
+  replicas: 1
+  selector: { matchLabels: { app: redis } }
+  template:
+    metadata: { labels: { app: redis, part-of: sentineluni } }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["redis-server", "--appendonly", "yes"]
+          ports: [{ containerPort: 6379 }]
+          volumeMounts: [{ name: data, mountPath: /data }]
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 1Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: redis, namespace: sentineluni }
+spec:
+  selector: { app: redis }
+  ports: [{ name: main, port: 6379, targetPort: 6379 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: mongo, namespace: sentineluni, labels: { app: mongo, part-of: sentineluni } }
+spec:
+  serviceName: mongo
+  replicas: 1
+  selector: { matchLabels: { app: mongo } }
+  template:
+    metadata: { labels: { app: mongo, part-of: sentineluni } }
+    spec:
+      containers:
+        - name: mongo
+          image: mongo:7
+          ports: [{ containerPort: 27017 }]
+          volumeMounts: [{ name: data, mountPath: /data/db }]
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 2Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: mongo, namespace: sentineluni }
+spec:
+  selector: { app: mongo }
+  ports: [{ name: main, port: 27017, targetPort: 27017 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: nats, namespace: sentineluni, labels: { app: nats, part-of: sentineluni } }
+spec:
+  serviceName: nats
+  replicas: 1
+  selector: { matchLabels: { app: nats } }
+  template:
+    metadata: { labels: { app: nats, part-of: sentineluni } }
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.10-alpine
+          args: ["-js", "-sd", "/data", "-m", "8222"]
+          ports: [{ containerPort: 4222 }, { containerPort: 8222 }]
+          readinessProbe: { httpGet: { path: /healthz, port: 8222 }, periodSeconds: 5 }
+          volumeMounts: [{ name: data, mountPath: /data }]
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 1Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: nats, namespace: sentineluni }
+spec:
+  selector: { app: nats }
+  ports: [{ name: main, port: 4222, targetPort: 4222 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: minio, namespace: sentineluni, labels: { app: minio, part-of: sentineluni } }
+spec:
+  serviceName: minio
+  replicas: 1
+  selector: { matchLabels: { app: minio } }
+  template:
+    metadata: { labels: { app: minio, part-of: sentineluni } }
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+          args: ["server", "/data", "--console-address", ":9001"]
+          ports: [{ containerPort: 9000 }, { containerPort: 9001 }]
+          env:
+            - { name: MINIO_ROOT_USER, valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: MINIO_ROOT_USER } } }
+            - { name: MINIO_ROOT_PASSWORD, valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: MINIO_ROOT_PASSWORD } } }
+          readinessProbe: { httpGet: { path: /minio/health/ready, port: 9000 }, periodSeconds: 5 }
+          volumeMounts: [{ name: data, mountPath: /data }]
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 2Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: minio, namespace: sentineluni }
+spec:
+  selector: { app: minio }
+  ports: [{ name: main, port: 9000, targetPort: 9000 }]

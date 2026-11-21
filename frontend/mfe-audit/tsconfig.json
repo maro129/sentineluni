@@ -1,0 +1,1 @@
+{ "extends": "../tsconfig.base.json", "compilerOptions": { "baseUrl": "..", "paths": { "@sentinel/shared": ["./shared/src/index.ts"] } }, "include": ["src", "../shared/src", "../shell/src/env.d.ts"] }

@@ -1,0 +1,30 @@
+{
+  "name": "sentineluni-frontend",
+  "private": true,
+  "description": "Frontend de SentinelUNI: shell (host) + microfrontends con Webpack 5 Module Federation",
+  "workspaces": ["shared", "shell", "mfe-incidents", "mfe-notifications", "mfe-audit"],
+  "scripts": {
+    "dev": "concurrently -k -n shell,incidents,notifications,audit -c cyan,magenta,green,yellow \"npm run dev -w shell\" \"npm run dev -w mfe-incidents\" \"npm run dev -w mfe-notifications\" \"npm run dev -w mfe-audit\"",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc -p shell --noEmit && tsc -p mfe-incidents --noEmit && tsc -p mfe-notifications --noEmit && tsc -p mfe-audit --noEmit"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "concurrently": "^9.1.0",
+    "copy-webpack-plugin": "^12.0.2",
+    "css-loader": "^7.1.2",
+    "html-webpack-plugin": "^5.6.3",
+    "style-loader": "^4.0.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.6.3",
+    "webpack": "^5.96.1",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^5.1.0",
+    "workbox-webpack-plugin": "^7.3.0"
+  }
+}

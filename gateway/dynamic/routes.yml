@@ -1,0 +1,133 @@
+# API GATEWAY (Traefik v3) — rutas, middlewares y servicios.
+http:
+  routers:
+    # ---------- API pública ----------
+    auth-login:
+      rule: "Path(`/api/auth/login`) && Method(`POST`)"
+      entryPoints: [websecure]
+      middlewares: [login-ratelimit, strip-api, api-headers]
+      service: user-service
+    # ---------- API protegida (JWT) ----------
+    incidents:
+      rule: "PathPrefix(`/api/incidents`)"
+      entryPoints: [websecure]
+      middlewares: [api-ratelimit, jwt-auth, strip-api, api-headers]
+      service: incident-service
+    notifications:
+      rule: "PathPrefix(`/api/notifications`)"
+      entryPoints: [websecure]
+      middlewares: [api-ratelimit, jwt-auth, strip-api, api-headers]
+      service: notification-service
+    audit:
+      rule: "PathPrefix(`/api/audit`)"
+      entryPoints: [websecure]
+      middlewares: [api-ratelimit, jwt-auth, strip-api, api-headers]
+      service: audit-service
+    # ---------- Estado de servicios (sin rate limit, sin datos sensibles) ----------
+    health-users:
+      rule: "Path(`/api/health/users`)"
+      entryPoints: [websecure]
+      middlewares: [to-health]
+      service: user-service
+    health-incidents:
+      rule: "Path(`/api/health/incidents`)"
+      entryPoints: [websecure]
+      middlewares: [to-health]
+      service: incident-service
+    health-notifications:
+      rule: "Path(`/api/health/notifications`)"
+      entryPoints: [websecure]
+      middlewares: [to-health]
+      service: notification-service
+    health-audit:
+      rule: "Path(`/api/health/audit`)"
+      entryPoints: [websecure]
+      middlewares: [to-health]
+      service: audit-service
+    health-triage:
+      rule: "Path(`/api/health/triage`)"
+      entryPoints: [websecure]
+      middlewares: [to-health]
+      service: triage-service
+    # ---------- Microfrontends (Module Federation) ----------
+    mfe-incidents:
+      rule: "PathPrefix(`/mfe/incidents/`)"
+      entryPoints: [websecure]
+      middlewares: [strip-mfe-incidents, web-headers]
+      service: mfe-incidents
+    mfe-notifications:
+      rule: "PathPrefix(`/mfe/notifications/`)"
+      entryPoints: [websecure]
+      middlewares: [strip-mfe-notifications, web-headers]
+      service: mfe-notifications
+    mfe-audit:
+      rule: "PathPrefix(`/mfe/audit/`)"
+      entryPoints: [websecure]
+      middlewares: [strip-mfe-audit, web-headers]
+      service: mfe-audit
+    shell:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      entryPoints: [websecure]
+      middlewares: [web-headers]
+      service: shell
+
+  middlewares:
+    # Autenticación: cada petición protegida se valida en User Service (/auth/verify).
+    # Si el JWT es válido, Traefik REEMPLAZA X-User / X-Role con la identidad verificada.
+    jwt-auth:
+      forwardAuth:
+        address: "http://user-service:3000/auth/verify"
+        authResponseHeaders: [X-User, X-Role, X-User-Name]
+    # Rate limiting por IP: 100 peticiones por minuto (ráfaga de 50).
+    api-ratelimit:
+      rateLimit: { average: 100, period: 1m, burst: 50 }
+    # Login más estricto contra fuerza bruta: 10 intentos por minuto por IP.
+    login-ratelimit:
+      rateLimit: { average: 10, period: 1m, burst: 5 }
+    strip-api:
+      stripPrefix: { prefixes: ["/api"] }
+    to-health:
+      replacePath: { path: "/health" }
+    strip-mfe-incidents:
+      stripPrefix: { prefixes: ["/mfe/incidents"] }
+    strip-mfe-notifications:
+      stripPrefix: { prefixes: ["/mfe/notifications"] }
+    strip-mfe-audit:
+      stripPrefix: { prefixes: ["/mfe/audit"] }
+    api-headers:
+      headers:
+        stsSeconds: 31536000
+        contentTypeNosniff: true
+        frameDeny: true
+        referrerPolicy: no-referrer
+        customResponseHeaders: { Cache-Control: "no-store" }
+    web-headers:
+      headers:
+        stsSeconds: 31536000
+        contentTypeNosniff: true
+        frameDeny: true
+        referrerPolicy: same-origin
+        contentSecurityPolicy: "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'"
+
+  services:
+    user-service:
+      loadBalancer: { servers: [{ url: "http://user-service:3000" }] }
+    incident-service:
+      loadBalancer:
+        servers: [{ url: "http://incident-service:8080" }]
+        healthCheck: { path: /health, interval: 10s }
+    notification-service:
+      loadBalancer: { servers: [{ url: "http://notification-service:8080" }] }
+    audit-service:
+      loadBalancer: { servers: [{ url: "http://audit-service:8080" }] }
+    triage-service:
+      loadBalancer: { servers: [{ url: "http://triage-service:8080" }] }
+    shell:
+      loadBalancer: { servers: [{ url: "http://shell:80" }] }
+    mfe-incidents:
+      loadBalancer: { servers: [{ url: "http://mfe-incidents:80" }] }
+    mfe-notifications:
+      loadBalancer: { servers: [{ url: "http://mfe-notifications:80" }] }
+    mfe-audit:
+      loadBalancer: { servers: [{ url: "http://mfe-audit:80" }] }

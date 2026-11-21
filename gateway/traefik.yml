@@ -1,0 +1,49 @@
+# API GATEWAY (Traefik v3) — configuración estática.
+# Puerta de entrada única: HTTPS, routing, autenticación JWT, rate limiting, seguridad,
+# logging (access log JSON), métricas Prometheus y trazas OpenTelemetry.
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:              # todo HTTP se redirige a HTTPS
+        entryPoint: { to: websecure, scheme: https, permanent: true }
+  websecure:
+    address: ":443"
+    http:
+      tls: {}                    # autofirmado por defecto; con scripts/gen-certs.sh usa mkcert (confiable)
+  metrics:
+    address: ":8082"             # solo red interna: lo lee Prometheus
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic   # routes.yml (+ tls.yml si generaste certificados con scripts/gen-certs.sh)
+    watch: true
+
+api:
+  dashboard: true
+  insecure: true                 # dashboard en :8080 (publicado solo en localhost para la demo)
+
+ping: {}
+
+log:
+  level: INFO
+
+accessLog:
+  format: json
+  fields:
+    headers:
+      names:
+        X-User: keep             # quién hizo la petición (lo pone el forwardAuth)
+        Authorization: drop      # nunca registrar el token
+
+metrics:
+  prometheus:
+    entryPoint: metrics
+    addRoutersLabels: true
+    addServicesLabels: true
+
+tracing:
+  serviceName: api-gateway
+  otlp:
+    http:
+      endpoint: http://otel-collector:4318/v1/traces

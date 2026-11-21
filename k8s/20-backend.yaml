@@ -1,0 +1,189 @@
+# BACKEND y EVENT CONSUMERS (imágenes construidas por CI o con docker compose build)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: user-service, namespace: sentineluni, labels: { app: user-service, part-of: sentineluni } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: user-service } }
+  template:
+    metadata: { labels: { app: user-service, part-of: sentineluni } }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: user-service
+          image: sentineluni-user-service:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 3000 }]
+          env:
+            - name: PORT
+              value: "3000"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4318"
+            - name: OTEL_SERVICE_NAME
+              value: "user-service"
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: USERS_DATABASE_URL } }
+            - name: JWT_SECRET
+              valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: JWT_SECRET } }
+          readinessProbe: { httpGet: { path: /health, port: 3000 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 3000 }, periodSeconds: 15, failureThreshold: 4 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: user-service, namespace: sentineluni }
+spec:
+  selector: { app: user-service }
+  ports: [{ port: 3000, targetPort: 3000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: incident-service, namespace: sentineluni, labels: { app: incident-service, part-of: sentineluni } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: incident-service } }
+  template:
+    metadata: { labels: { app: incident-service, part-of: sentineluni } }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: incident-service
+          image: sentineluni-incident-service:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          env:
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4318"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            - name: S3_ENDPOINT
+              value: "minio:9000"
+            - name: S3_BUCKET
+              value: "evidence"
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: INCIDENTS_DATABASE_URL } }
+            - name: S3_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: MINIO_ROOT_USER } }
+            - name: S3_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: MINIO_ROOT_PASSWORD } }
+          readinessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 15, failureThreshold: 4 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: incident-service, namespace: sentineluni }
+spec:
+  selector: { app: incident-service }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: triage-service, namespace: sentineluni, labels: { app: triage-service, part-of: sentineluni } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: triage-service } }
+  template:
+    metadata: { labels: { app: triage-service, part-of: sentineluni } }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: triage-service
+          image: sentineluni-triage-service:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          env:
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4318"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+          readinessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 15, failureThreshold: 4 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: triage-service, namespace: sentineluni }
+spec:
+  selector: { app: triage-service }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: notification-service, namespace: sentineluni, labels: { app: notification-service, part-of: sentineluni } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: notification-service } }
+  template:
+    metadata: { labels: { app: notification-service, part-of: sentineluni } }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: notification-service
+          image: sentineluni-notification-service:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          env:
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4318"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: NOTIFICATIONS_DATABASE_URL } }
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: TELEGRAM_BOT_TOKEN } }
+            - name: TELEGRAM_CHAT_ID
+              valueFrom: { secretKeyRef: { name: sentineluni-secrets, key: TELEGRAM_CHAT_ID } }
+          readinessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 15, failureThreshold: 4 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: notification-service, namespace: sentineluni }
+spec:
+  selector: { app: notification-service }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: audit-service, namespace: sentineluni, labels: { app: audit-service, part-of: sentineluni } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: audit-service } }
+  template:
+    metadata: { labels: { app: audit-service, part-of: sentineluni } }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: audit-service
+          image: sentineluni-audit-service:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          env:
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4318"
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            - name: MONGO_URL
+              value: "mongodb://mongo:27017"
+            - name: MONGO_DB
+              value: "audit_db"
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
+          readinessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /health, port: 8080 }, periodSeconds: 15, failureThreshold: 4 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: audit-service, namespace: sentineluni }
+spec:
+  selector: { app: audit-service }
+  ports: [{ port: 8080, targetPort: 8080 }]

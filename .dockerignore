@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+frontend
+mobile
+k8s
+docs
+.git
+.github
+gateway/certs
+*.local.mod
+*.local.sum

@@ -1,0 +1,109 @@
+# FRONTEND: shell (PWA) + microfrontends, cada uno con su propio despliegue
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: shell, namespace: sentineluni, labels: { app: shell, part-of: sentineluni } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: shell } }
+  template:
+    metadata: { labels: { app: shell, part-of: sentineluni } }
+    spec:
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: shell
+          image: sentineluni-shell:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 80 }]
+          readinessProbe: { httpGet: { path: /, port: 80 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /, port: 80 }, periodSeconds: 15, failureThreshold: 4 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL], add: [CHOWN, SETUID, SETGID, NET_BIND_SERVICE] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: shell, namespace: sentineluni }
+spec:
+  selector: { app: shell }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: mfe-incidents, namespace: sentineluni, labels: { app: mfe-incidents, part-of: sentineluni } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: mfe-incidents } }
+  template:
+    metadata: { labels: { app: mfe-incidents, part-of: sentineluni } }
+    spec:
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: mfe-incidents
+          image: sentineluni-mfe-incidents:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 80 }]
+          readinessProbe: { httpGet: { path: /, port: 80 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /, port: 80 }, periodSeconds: 15, failureThreshold: 4 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL], add: [CHOWN, SETUID, SETGID, NET_BIND_SERVICE] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: mfe-incidents, namespace: sentineluni }
+spec:
+  selector: { app: mfe-incidents }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: mfe-notifications, namespace: sentineluni, labels: { app: mfe-notifications, part-of: sentineluni } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: mfe-notifications } }
+  template:
+    metadata: { labels: { app: mfe-notifications, part-of: sentineluni } }
+    spec:
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: mfe-notifications
+          image: sentineluni-mfe-notifications:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 80 }]
+          readinessProbe: { httpGet: { path: /, port: 80 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /, port: 80 }, periodSeconds: 15, failureThreshold: 4 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL], add: [CHOWN, SETUID, SETGID, NET_BIND_SERVICE] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: mfe-notifications, namespace: sentineluni }
+spec:
+  selector: { app: mfe-notifications }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: mfe-audit, namespace: sentineluni, labels: { app: mfe-audit, part-of: sentineluni } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: mfe-audit } }
+  template:
+    metadata: { labels: { app: mfe-audit, part-of: sentineluni } }
+    spec:
+      securityContext: { seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: mfe-audit
+          image: sentineluni-mfe-audit:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 80 }]
+          readinessProbe: { httpGet: { path: /, port: 80 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /, port: 80 }, periodSeconds: 15, failureThreshold: 4 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL], add: [CHOWN, SETUID, SETGID, NET_BIND_SERVICE] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: mfe-audit, namespace: sentineluni }
+spec:
+  selector: { app: mfe-audit }
+  ports: [{ port: 80, targetPort: 80 }]
